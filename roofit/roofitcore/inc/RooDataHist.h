@@ -19,23 +19,19 @@
 #include "RooAbsData.h"
 #include "RooDirItem.h"
 #include "RooArgSet.h"
-#include "RooNameSet.h"
-#include "RooCacheManager.h"
 
 #include <map>
 #include <vector>
 #include <string>
 #include <functional>
 #include <memory>
+#include <unordered_map>
 
+class TAxis ;
 class TObject ;
 class RooAbsArg;
-class RooAbsReal ;
-class RooAbsCategory ;
-class Roo1DTable ;
+class RooCategory ;
 class RooPlot;
-class RooArgSet ;
-class RooLinkedList ;
 class RooAbsLValue ;
 
 class RooDataHist : public RooAbsData, public RooDirItem {
@@ -89,13 +85,13 @@ public:
   RooSpan<const double> getWeightBatch(std::size_t first, std::size_t len) const override;
   void getBatches(RooBatchCompute::RunContext& evalData, std::size_t begin, std::size_t len) const override;
 
-  Double_t sum(Bool_t correctForBinSize, Bool_t inverseCorr=kFALSE) const ;
-  Double_t sum(const RooArgSet& sumSet, const RooArgSet& sliceSet, Bool_t correctForBinSize, Bool_t inverseCorr=kFALSE) ;
+  Double_t sum(bool correctForBinSize, bool inverseCorr=false) const ;
+  Double_t sum(const RooArgSet& sumSet, const RooArgSet& sliceSet, bool correctForBinSize, bool inverseCorr=false) ;
   Double_t sum(const RooArgSet& sumSet,
                const RooArgSet& sliceSet,
-               Bool_t correctForBinSize,
-               Bool_t inverseCorr,
-               const std::map<const RooAbsArg*, std::pair<Double_t, Double_t> >& ranges,
+               bool correctForBinSize,
+               bool inverseCorr,
+               const std::map<const RooAbsArg*, std::pair<double, double> >& ranges,
                std::function<double(int)> getBinScale = [](int){ return 1.0; } );
 
   /// Return weight of i-th bin. \see getIndex()
@@ -132,7 +128,23 @@ public:
   void SetName(const char *name) override;
   void SetNameTitle(const char *name, const char* title) override;
 
-  Int_t getIndex(const RooArgSet& coord, Bool_t fast = false) const;
+  Int_t getIndex(const RooAbsCollection& coord, Bool_t fast = false) const;
+  /// \copydoc getIndex(const RooAbsCollection&,Bool_t) const
+  ///
+  /// \note This overload only exists because there is an implicit conversion from RooAbsArg
+  /// to RooArgSet, and this needs to remain supported. This enables code like
+  /// ```
+  /// RooRealVar x(...);
+  /// dataHist.getIndex(x);
+  /// ```
+  /// It is, however, recommended to use
+  /// ```
+  /// dataHist.getIndex(RooArgSet(x));
+  /// ```
+  /// in this case.
+  Int_t getIndex(const RooArgSet& coord, Bool_t fast = false) const {
+    return getIndex(static_cast<const RooAbsCollection&>(coord), fast);
+  }
 
   void removeSelfFromDir() { removeFromDir(this) ; }
 
@@ -192,7 +204,7 @@ protected:
   friend class RooAbsCachedReal ;
   friend class RooDataHistSliceIter ;
 
-  std::size_t calcTreeIndex(const RooArgSet& coords, bool fast) const;
+  std::size_t calcTreeIndex(const RooAbsCollection& coords, bool fast) const;
   /// Legacy overload to calculate the tree index from the current value of `_vars`.
   /// \deprecated Use calcTreeIndex(const RooArgSet&,bool) const.
   Int_t calcTreeIndex() const { return static_cast<Int_t>(calcTreeIndex(_vars, true)); }
@@ -242,7 +254,7 @@ protected:
  
   mutable std::size_t _curIndex{std::numeric_limits<std::size_t>::max()}; // Current index
 
-  mutable RooCacheManager<std::vector<Double_t> > _pbinvCacheMgr ; //! Cache manager for arrays of partial bin volumes
+  mutable std::unordered_map<int,std::vector<double>> _pbinvCache ; //! Cache for arrays of partial bin volumes
   std::vector<RooAbsLValue*> _lvvars ; //! List of observables casted as RooAbsLValue
   std::vector<std::unique_ptr<const RooAbsBinning>> _lvbins ; //! List of used binnings associated with lvalues
   mutable std::vector<std::vector<Double_t> > _binbounds; //! list of bin bounds per dimension

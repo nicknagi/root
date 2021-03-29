@@ -13,22 +13,6 @@
 #define ROOT_TGTab
 
 
-//////////////////////////////////////////////////////////////////////////
-//                                                                      //
-// TGTab, TGTabElement, TGTabLayout                                     //
-//                                                                      //
-// A tab widget contains a set of composite frames each with a little   //
-// tab with a name (like a set of folders with tabs).                   //
-//                                                                      //
-// The TGTab is user callable. The TGTabElement and TGTabLayout are     //
-// is a service classes of the tab widget.                              //
-//                                                                      //
-// Clicking on a tab will bring the associated composite frame to the   //
-// front and generate the following event:                              //
-// kC_COMMAND, kCM_TAB, tab id, 0.                                      //
-//                                                                      //
-//////////////////////////////////////////////////////////////////////////
-
 #include "TGFrame.h"
 #include "TGWidget.h"
 
@@ -68,6 +52,7 @@ protected:
    TList              *fRemoved;        // list of removed tabs
    FontStruct_t        fFontStruct;     // font
    GContext_t          fNormGC;         // drawing context
+   Bool_t              fScrolling;      // true if tab scrolling enabled
 
    void ChangeTab(Int_t tabIndex, Bool_t emit=kTRUE);
 
@@ -114,6 +99,8 @@ public:
    virtual void      SetEnabled(Int_t tabIndex, Bool_t on = kTRUE);  //*MENU*
    virtual void      SetText(const char *text = "tab");              //*MENU*icon=bld_rename.png*
    Bool_t            IsEnabled(Int_t tabIndex) const;
+   virtual void      SetScrollingEnabled(Bool_t on = kTRUE);
+   Bool_t            IsScrollingEnabled() const;
 
    virtual void      SavePrimitive(std::ostream &out, Option_t *option = "");
 

@@ -342,7 +342,7 @@ Double_t RooAbsPdf::getValV(const RooArgSet* nset) const
 /// is finalised by normalising the bare values, and by checking for computation errors.
 /// Derived classes should override evaluateSpan() to reach maximal performance.
 ///
-/// \param[in/out] evalData Object holding data that should be used in computations. Results are also stored here.
+/// \param[in,out] evalData Object holding data that should be used in computations. Results are also stored here.
 /// \param[in] normSet      If not nullptr, normalise results by integrating over
 /// the variables in this set. The normalisation is only computed once, and applied
 /// to the full batch.
@@ -1398,14 +1398,13 @@ RooFitResult* RooAbsPdf::fitTo(RooAbsData& data, const RooLinkedList& cmdList)
 			  << endl ;
   }
 
-
-  // Warn user that sum-of-weights correction does not apply to MINOS errrors
-  if (doSumW2==1 && minos) {
-    coutW(InputArguments) << "RooAbsPdf::fitTo(" << GetName() << ") WARNING: sum-of-weights correction does not apply to MINOS errors" << endl ;
+  if (minos && (doSumW2==1 || doAsymptotic == 1)) {
+    coutE(InputArguments) << "RooAbsPdf::fitTo(" << GetName() << "): sum-of-weights and asymptotic error correction do not work with MINOS errors. Not fitting." << endl;
+    return nullptr;
   }
   if (doAsymptotic==1 && minos) {
-      coutW(InputArguments) << "RooAbsPdf::fitTo(" << GetName() << ") WARNING: asymptotic correction does not apply to MINOS errors" << endl ;
-    }
+    coutW(InputArguments) << "RooAbsPdf::fitTo(" << GetName() << ") WARNING: asymptotic correction does not apply to MINOS errors" << endl ;
+  }
 
   if (prefit != 0)  {
     size_t nEvents = static_cast<size_t>(prefit*data.numEntries());
@@ -1512,56 +1511,56 @@ RooFitResult* RooAbsPdf::fitTo(RooAbsData& data, const RooLinkedList& cmdList)
 
       //asymptotically correct approach
       if (doAsymptotic==1 && m.getNPar()>0) {
-	//Calculated corrected errors for weighted likelihood fits
-	std::unique_ptr<RooFitResult> rw(m.save());
-	//Weighted inverse Hessian matrix
-	const TMatrixDSym& matV = rw->covarianceMatrix();
-	coutI(Fitting) << "RooAbsPdf::fitTo(" << GetName() << ") Calculating covariance matrix according to the asymptotically correct approach. If you find this method useful please consider citing https://arxiv.org/abs/1911.01303." << endl;
+        //Calculated corrected errors for weighted likelihood fits
+        std::unique_ptr<RooFitResult> rw(m.save());
+        //Weighted inverse Hessian matrix
+        const TMatrixDSym& matV = rw->covarianceMatrix();
+        coutI(Fitting) << "RooAbsPdf::fitTo(" << GetName() << ") Calculating covariance matrix according to the asymptotically correct approach. If you find this method useful please consider citing https://arxiv.org/abs/1911.01303." << endl;
 
-	//Initialise matrix containing first derivatives
-	TMatrixDSym num(rw->floatParsFinal().getSize());
-	for (int k=0; k<rw->floatParsFinal().getSize(); k++)
-	   for (int l=0; l<rw->floatParsFinal().getSize(); l++)
-	      num(k,l) = 0.0;
-	RooArgSet* obs = getObservables(data);
-	//Create derivative objects
-	std::vector<std::unique_ptr<RooDerivative> > derivatives;
-	const RooArgList& floated = rw->floatParsFinal();
-	std::unique_ptr<RooArgSet> floatingparams( (RooArgSet*)getParameters(data)->selectByAttrib("Constant", false) );
-	for (const auto paramresult : floated) {
-	   auto paraminternal = static_cast<RooRealVar*>(floatingparams->find(*paramresult));
-	   assert(floatingparams->find(*paramresult)->IsA() == RooRealVar::Class());
-	   std::unique_ptr<RooDerivative> deriv( derivative(*paraminternal, *obs, 1) );
-	   derivatives.push_back(std::move(deriv));
-	}
+        //Initialise matrix containing first derivatives
+        TMatrixDSym num(rw->floatParsFinal().getSize());
+        for (int k=0; k<rw->floatParsFinal().getSize(); k++)
+          for (int l=0; l<rw->floatParsFinal().getSize(); l++)
+            num(k,l) = 0.0;
+        RooArgSet* obs = getObservables(data);
+        //Create derivative objects
+        std::vector<std::unique_ptr<RooDerivative> > derivatives;
+        const RooArgList& floated = rw->floatParsFinal();
+        std::unique_ptr<RooArgSet> floatingparams( (RooArgSet*)getParameters(data)->selectByAttrib("Constant", false) );
+        for (const auto paramresult : floated) {
+          auto paraminternal = static_cast<RooRealVar*>(floatingparams->find(*paramresult));
+          assert(floatingparams->find(*paramresult)->IsA() == RooRealVar::Class());
+          std::unique_ptr<RooDerivative> deriv( derivative(*paraminternal, *obs, 1) );
+          derivatives.push_back(std::move(deriv));
+        }
 
-	//Loop over data
-	for (int j=0; j<data.numEntries(); j++) {
-	   //Sets obs to current data point, this is where the pdf will be evaluated
-	   *obs = *data.get(j);
-	   //Determine first derivatives
-	   std::vector<Double_t> diffs(floated.getSize(), 0.0);
-	   for (int k=0; k < floated.getSize(); k++) {
-	      const auto paramresult = static_cast<RooRealVar*>(floated.at(k));
-	      auto paraminternal = static_cast<RooRealVar*>(floatingparams->find(*paramresult));
-	      //first derivative to parameter k at best estimate point for this measurement
-	      Double_t diff = derivatives.at(k)->getVal();
-	      //need to reset to best fit point after differentiation
-	      *paraminternal = paramresult->getVal();
-	      diffs.at(k) = diff;
-	   }
-	   //Fill numerator matrix
-	   Double_t prob = getVal(obs);
-	   for (int k=0; k<floated.getSize(); k++) {
-	      for (int l=0; l<floated.getSize(); l++) {
-	         num(k,l) += data.weight()*data.weight()*diffs.at(k)*diffs.at(l)/(prob*prob);
-	      }
-	   }
-	}
-	num.Similarity(matV);
+        //Loop over data
+        for (int j=0; j<data.numEntries(); j++) {
+          //Sets obs to current data point, this is where the pdf will be evaluated
+          *obs = *data.get(j);
+          //Determine first derivatives
+          std::vector<Double_t> diffs(floated.getSize(), 0.0);
+          for (int k=0; k < floated.getSize(); k++) {
+            const auto paramresult = static_cast<RooRealVar*>(floated.at(k));
+            auto paraminternal = static_cast<RooRealVar*>(floatingparams->find(*paramresult));
+            //first derivative to parameter k at best estimate point for this measurement
+            Double_t diff = derivatives.at(k)->getVal();
+            //need to reset to best fit point after differentiation
+            *paraminternal = paramresult->getVal();
+            diffs.at(k) = diff;
+          }
+          //Fill numerator matrix
+          Double_t prob = getVal(obs);
+          for (int k=0; k<floated.getSize(); k++) {
+            for (int l=0; l<floated.getSize(); l++) {
+              num(k,l) += data.weight()*data.weight()*diffs.at(k)*diffs.at(l)/(prob*prob);
+            }
+          }
+        }
+        num.Similarity(matV);
 
-	//Propagate corrected errors to parameters objects
-	m.applyCovarianceMatrix(num);
+        //Propagate corrected errors to parameters objects
+        m.applyCovarianceMatrix(num);
       }
 
       if (doSumW2==1 && m.getNPar()>0) {
@@ -1694,56 +1693,56 @@ RooFitResult* RooAbsPdf::fitTo(RooAbsData& data, const RooLinkedList& cmdList)
 
       //asymptotically correct approach
       if (doAsymptotic==1 && m.getNPar()>0) {
-	//Calculated corrected errors for weighted likelihood fits
-	std::unique_ptr<RooFitResult> rw(m.save());
-	//Weighted inverse Hessian matrix
-	const TMatrixDSym& matV = rw->covarianceMatrix();
-	coutI(Fitting) << "RooAbsPdf::fitTo(" << GetName() << ") Calculating covariance matrix according to the asymptotically correct approach. If you find this method useful please consider citing https://arxiv.org/abs/1911.01303." << endl;
+        //Calculated corrected errors for weighted likelihood fits
+        std::unique_ptr<RooFitResult> rw(m.save());
+        //Weighted inverse Hessian matrix
+        const TMatrixDSym& matV = rw->covarianceMatrix();
+        coutI(Fitting) << "RooAbsPdf::fitTo(" << GetName() << ") Calculating covariance matrix according to the asymptotically correct approach. If you find this method useful please consider citing https://arxiv.org/abs/1911.01303." << endl;
 
-	//Initialise matrix containing first derivatives
-	TMatrixDSym num(rw->floatParsFinal().getSize());
-	for (int k=0; k<rw->floatParsFinal().getSize(); k++)
-	   for (int l=0; l<rw->floatParsFinal().getSize(); l++)
-	      num(k,l) = 0.0;
-	RooArgSet* obs = getObservables(data);
-	//Create derivative objects
-	std::vector<std::unique_ptr<RooDerivative> > derivatives;
-	const RooArgList& floated = rw->floatParsFinal();
-	std::unique_ptr<RooArgSet> floatingparams( (RooArgSet*)getParameters(data)->selectByAttrib("Constant", false) );
-	for (int k=0; k<floated.getSize(); k++) {
-	   RooRealVar* paramresult = (RooRealVar*)floated.at(k);
-	   RooRealVar* paraminternal = (RooRealVar*)floatingparams->find(paramresult->getTitle());
-	   std::unique_ptr<RooDerivative> deriv( derivative(*paraminternal, *obs, 1) );
-	   derivatives.push_back(std::move(deriv));
-	}
+        //Initialise matrix containing first derivatives
+        TMatrixDSym num(rw->floatParsFinal().getSize());
+        for (int k=0; k<rw->floatParsFinal().getSize(); k++)
+          for (int l=0; l<rw->floatParsFinal().getSize(); l++)
+            num(k,l) = 0.0;
+        RooArgSet* obs = getObservables(data);
+        //Create derivative objects
+        std::vector<std::unique_ptr<RooDerivative> > derivatives;
+        const RooArgList& floated = rw->floatParsFinal();
+        std::unique_ptr<RooArgSet> floatingparams( (RooArgSet*)getParameters(data)->selectByAttrib("Constant", false) );
+        for (int k=0; k<floated.getSize(); k++) {
+          RooRealVar* paramresult = (RooRealVar*)floated.at(k);
+          RooRealVar* paraminternal = (RooRealVar*)floatingparams->find(paramresult->getTitle());
+          std::unique_ptr<RooDerivative> deriv( derivative(*paraminternal, *obs, 1) );
+          derivatives.push_back(std::move(deriv));
+        }
 
-	//Loop over data
-	for (int j=0; j<data.numEntries(); j++) {
-	   //Sets obs to current data point, this is where the pdf will be evaluated
-	   *obs = *data.get(j);
-	   //Determine first derivatives
-	   std::vector<Double_t> diffs(floated.getSize(), 0.0);
-	   for (int k=0; k<floated.getSize(); k++) {
-	      RooRealVar* paramresult = (RooRealVar*)floated.at(k);
-	      RooRealVar* paraminternal = (RooRealVar*)floatingparams->find(paramresult->getTitle());
-	      //First derivative to parameter k at best estimate point for this measurement
-	      Double_t diff = derivatives.at(k)->getVal();
-	      //Need to reset to best fit point after differentiation
-	      *paraminternal = paramresult->getVal();
-	      diffs.at(k) = diff;
-	   }
-	   //Fill numerator matrix
-	   Double_t prob = getVal(obs);
-	   for (int k=0; k<floated.getSize(); k++) {
-	      for (int l=0; l<floated.getSize(); l++) {
-	         num(k,l) += data.weight()*data.weight()*diffs.at(k)*diffs.at(l)/(prob*prob);
-	      }
-	   }
-	}
-	num.Similarity(matV);
+        //Loop over data
+        for (int j=0; j<data.numEntries(); j++) {
+          //Sets obs to current data point, this is where the pdf will be evaluated
+          *obs = *data.get(j);
+          //Determine first derivatives
+          std::vector<Double_t> diffs(floated.getSize(), 0.0);
+          for (int k=0; k<floated.getSize(); k++) {
+            RooRealVar* paramresult = (RooRealVar*)floated.at(k);
+            RooRealVar* paraminternal = (RooRealVar*)floatingparams->find(paramresult->getTitle());
+            //First derivative to parameter k at best estimate point for this measurement
+            Double_t diff = derivatives.at(k)->getVal();
+            //Need to reset to best fit point after differentiation
+            *paraminternal = paramresult->getVal();
+            diffs.at(k) = diff;
+          }
+          //Fill numerator matrix
+          Double_t prob = getVal(obs);
+          for (int k=0; k<floated.getSize(); k++) {
+            for (int l=0; l<floated.getSize(); l++) {
+              num(k,l) += data.weight()*data.weight()*diffs.at(k)*diffs.at(l)/(prob*prob);
+            }
+          }
+        }
+        num.Similarity(matV);
 
-	//Propagate corrected errors to parameters objects
-	m.applyCovarianceMatrix(num);
+        //Propagate corrected errors to parameters objects
+        m.applyCovarianceMatrix(num);
       }
 
       if (doSumW2==1 && m.getNPar()>0) {
@@ -3389,16 +3388,7 @@ Int_t RooAbsPdf::verboseEval()
 
 
 ////////////////////////////////////////////////////////////////////////////////
-/// Dummy implementation
-
-void RooAbsPdf::CacheElem::operModeHook(RooAbsArg::OperMode)
-{
-}
-
-
-
-////////////////////////////////////////////////////////////////////////////////
-/// Destructor of normalization cache element. If this element
+/// Destructor of normalization cache element. If this element 
 /// provides the 'current' normalization stored in RooAbsPdf::_norm
 /// zero _norm pointer here before object pointed to is deleted here
 

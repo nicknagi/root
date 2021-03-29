@@ -19,12 +19,14 @@ The following people have contributed to this new version:
  Olivier Couet, CERN/SFT,\
  Gerri Ganis, CERN/SFT,\
  Andrei Gheata, CERN/SFT,\
+ Jonas Hahnfeld, CERN/SFT,\
  Sergey Linev, GSI,\
  Pere Mato, CERN/SFT,\
  Lorenzo Moneta, CERN/SFT,\
  Axel Naumann, CERN/SFT,\
  Danilo Piparo, CERN/SFT,\
  Fons Rademakers, CERN/SFT,\
+ Jonas Rembser, CERN/SFT,\
  Enric Tejedor Saavedra, CERN/SFT,\
  Oksana Shadura, UNL/CMS,\
  Matevz Tadel, UCSD/CMS,\
@@ -32,6 +34,8 @@ The following people have contributed to this new version:
  Wouter Verkerke, NIKHEF/Atlas,
 
 ## Deprecation and Removal
+
+- `TTreeProcessorMT::SetMaxTasksPerFilePerWorker` has been removed. `TTreeProcessorMT::SetTasksPerWorkerHint` is a superior alternative.
 
 
 ## Core Libraries
@@ -50,7 +54,19 @@ The following people have contributed to this new version:
 
 
 ## RooFit Libraries
-
+### Creating RooFit datasets from RDataFrame
+RooFit now contains two RDataFrame action helpers, `RooDataSetHelper` and `RooDataHistHelper`, which allow for creating RooFit datasets by booking an action:
+```c++
+  RooRealVar x("x", "x", -5.,   5.);
+  RooRealVar y("y", "y", -50., 50.);
+  auto myDataSet = rdataframe.Book<double, double>(
+    RooDataSetHelper{"dataset",          // Name   (directly forwarded to RooDataSet::RooDataSet())
+                    "Title of dataset",  // Title  (                   ~ " ~                      )
+                    RooArgSet(x, y) },   // Variables to create in dataset
+    {"x", "y"}                           // Column names from RDataFrame
+  );
+```
+For more details, consult the tutorial [rf408_RDataFrameToRooFit](https://root.cern/doc/v626/rf408__RDataFrameToRooFit_8C.html).
 
 ## 2D Graphics Libraries
 

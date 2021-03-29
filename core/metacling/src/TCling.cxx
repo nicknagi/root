@@ -766,7 +766,7 @@ int TCling_GenerateDictionary(const std::vector<std::string> &classes,
       for (it = fwdDecls.begin(); it != fwdDecls.end(); ++it) {
          fileContent += "class " + *it + ";\n";
       }
-      fileContent += "#ifdef __CINT__ \n";
+      fileContent += "#ifdef __CLING__ \n";
       fileContent += "#pragma link C++ nestedclasses;\n";
       fileContent += "#pragma link C++ nestedtypedefs;\n";
       for (it = classes.begin(); it != classes.end(); ++it) {
@@ -4458,7 +4458,6 @@ TClass *TCling::GenerateTClass(const char *classname, Bool_t emulation, Bool_t s
       Version_t oldvers = cl->fClassVersion;
       if (oldvers == version && cl->GetClassInfo()) {
          // We have a version and it might need an update.
-         Version_t newvers = oldvers;
          TClingClassInfo* cli = (TClingClassInfo*)cl->GetClassInfo();
          if (llvm::isa<clang::NamespaceDecl>(cli->GetDecl())) {
             // Namespaces don't have class versions.
@@ -4475,7 +4474,7 @@ TClass *TCling::GenerateTClass(const char *classname, Bool_t emulation, Bool_t s
             }
             return cl;
          }
-         newvers = ROOT::TMetaUtils::GetClassVersion(llvm::dyn_cast<clang::RecordDecl>(cli->GetDecl()),
+         Version_t newvers = ROOT::TMetaUtils::GetClassVersion(llvm::dyn_cast<clang::RecordDecl>(cli->GetDecl()),
                                                      *fInterpreter);
          if (newvers == -1) {
             // Didn't manage to determine the class version from the AST.
@@ -5358,44 +5357,36 @@ const char* TCling::GetCurrentMacroName() const
 
 const char* TCling::TypeName(const char* typeDesc)
 {
-   TTHREAD_TLS(char*) t = 0;
-   TTHREAD_TLS(unsigned int) tlen = 0;
+   TTHREAD_TLS_DECL(std::string,t);
 
-   unsigned int dlen = strlen(typeDesc);
-   if (dlen > tlen) {
-      delete[] t;
-      t = new char[dlen + 1];
-      tlen = dlen;
-   }
-   const char* s, *template_start;
    if (!strstr(typeDesc, "(*)(")) {
-      s = strchr(typeDesc, ' ');
-      template_start = strchr(typeDesc, '<');
+      const char *s = strchr(typeDesc, ' ');
+      const char *template_start = strchr(typeDesc, '<');
       if (!strcmp(typeDesc, "long long")) {
-         strlcpy(t, typeDesc, dlen + 1);
+         t = typeDesc;
       }
       else if (!strncmp(typeDesc, "unsigned ", s + 1 - typeDesc)) {
-         strlcpy(t, typeDesc, dlen + 1);
+         t = typeDesc;
       }
       // s is the position of the second 'word' (if any)
       // except in the case of templates where there will be a space
       // just before any closing '>': eg.
       //    TObj<std::vector<UShort_t,__malloc_alloc_template<0> > >*
       else if (s && (template_start == 0 || (s < template_start))) {
-         strlcpy(t, s + 1, dlen + 1);
+         t = s + 1;
       }
       else {
-         strlcpy(t, typeDesc, dlen + 1);
+         t = typeDesc;
       }
    }
    else {
-      strlcpy(t, typeDesc, dlen + 1);
+      t = typeDesc;
    }
-   int l = strlen(t);
-   while (l > 0 && (t[l - 1] == '*' || t[l - 1] == '&')) {
-      t[--l] = 0;
-   }
-   return t;
+   auto l = t.length();
+   while (l > 0 && (t[l - 1] == '*' || t[l - 1] == '&'))
+      --l;
+   t.resize(l);
+   return t.c_str(); // NOLINT
 }
 
 static bool requiresRootMap(const char* rootmapfile)
@@ -6084,61 +6075,63 @@ Int_t TCling::ShallowAutoLoadImpl(const char *cls)
 ////////////////////////////////////////////////////////////////////////////////
 // Iterate through the data member of the class (either through the TProtoClass
 // or through Cling) and trigger, recursively, the loading the necessary libraries.
-Int_t TCling::DeepAutoLoadImpl(const char *cls)
+// \note `cls` is expected to be already normalized!
+// \returns 1 on success.
+Int_t TCling::DeepAutoLoadImpl(const char *cls, std::unordered_set<std::string> &visited,
+                               bool nameIsNormalized)
 {
-   Int_t status = ShallowAutoLoadImpl(cls);
-   if (status) {
+   // Try to insert; if insertion failed because the entry existed, DeepAutoLoadImpl()
+   // has previously (within the same call to `AutoLoad()`) tried to load this class
+   // and we are done, whether success or not, as it won't work better now than before,
+   // because there is no additional information now compared to before.
+   if (!visited.insert(std::string(cls)).second)
+      return 1;
 
-      // This routine should be called only from AutoLoad which has already
-      // taken the main ROOT lock so this should not have any race condition.
-      // If the lock is removed from AutoLoad, a spin lock should be introduced here.
-      // Note that it is actually alright if another thread is populating this
-      // set since we can then exclude both the infinite recursion (the main goal)
-      // and duplicate work.
-      static std::set<std::string> gClassOnStack;
-      auto insertResult = gClassOnStack.insert(std::string(cls));
-      if (insertResult.second) {
-         // Now look through the TProtoClass to load the required library/dictionary
-         TProtoClass *proto = TClassTable::GetProto(cls);
-         if (proto) {
-            for(auto element : proto->GetData()) {
-               const char *subtypename = element->GetTypeName();
-               if (!element->IsBasic() && !TClassTable::GetDictNorm(subtypename)) {
-                  // Failure to load a dictionary is not (quite) a failure load
-                  // the top-level library.  If we return false here, then
-                  // we would end up in a situation where the library and thus
-                  // the dictionary is loaded for "cls" but the TClass is
-                  // not created and/or marked as unavailable (in case where
-                  // AutoLoad is called from TClass::GetClass).
-                  (void) DeepAutoLoadImpl(subtypename);
-               }
-            }
-         } else {
-            auto classinfo = gInterpreter->ClassInfo_Factory(cls);
-            if (classinfo && gInterpreter->ClassInfo_IsValid(classinfo)
-                && !(gInterpreter->ClassInfo_Property(classinfo) & kIsEnum))
-            {
-               DataMemberInfo_t *memberinfo = gInterpreter->DataMemberInfo_Factory(classinfo, TDictionary::EMemberSelection::kNoUsingDecls);
-               while (gInterpreter->DataMemberInfo_Next(memberinfo)) {
-                  auto membertypename = TClassEdit::GetLong64_Name(gInterpreter->TypeName(gInterpreter->DataMemberInfo_TypeTrueName(memberinfo)));
-                  if (!(gInterpreter->DataMemberInfo_TypeProperty(memberinfo) & ::kIsFundamental)
-                      && !TClassTable::GetDictNorm(membertypename.c_str()))
-                  {
-                     // Failure to load a dictionary is not (quite) a failure load
-                     // the top-level library.   See detailed comment in the TProtoClass
-                     // branch (above).
-                     (void)DeepAutoLoadImpl(membertypename.c_str());
-                  }
-               }
-               gInterpreter->DataMemberInfo_Delete(memberinfo);
-            }
-            gInterpreter->ClassInfo_Delete(classinfo);
-         }
-         // Because they could have been failures, allow for another try later
-         gClassOnStack.erase(insertResult.first);
-      }
+   if (ShallowAutoLoadImpl(cls) == 0) {
+      // If ShallowAutoLoadImpl() has an error, we have an error.
+      return 0;
    }
-   return status;
+
+   // Now look through the TProtoClass to load the required library/dictionary
+   if (TProtoClass *proto = nameIsNormalized ? TClassTable::GetProtoNorm(cls) : TClassTable::GetProto(cls)) {
+      for (auto element : proto->GetData()) {
+         if (element->IsBasic())
+            continue;
+         const char *subtypename = element->GetTypeName();
+         if (!TClassTable::GetDictNorm(subtypename)) {
+            // Failure to load a dictionary is not (quite) a failure load
+            // the top-level library.  If we return false here, then
+            // we would end up in a situation where the library and thus
+            // the dictionary is loaded for "cls" but the TClass is
+            // not created and/or marked as unavailable (in case where
+            // AutoLoad is called from TClass::GetClass).
+            DeepAutoLoadImpl(subtypename, visited, true /*normalized*/);
+         }
+      }
+      return 1;
+   }
+
+   // We found no TProtoClass for cls.
+   auto classinfo = gInterpreter->ClassInfo_Factory(cls);
+   if (classinfo && gInterpreter->ClassInfo_IsValid(classinfo)
+         && !(gInterpreter->ClassInfo_Property(classinfo) & kIsEnum))
+   {
+      DataMemberInfo_t *memberinfo = gInterpreter->DataMemberInfo_Factory(classinfo, TDictionary::EMemberSelection::kNoUsingDecls);
+      while (gInterpreter->DataMemberInfo_Next(memberinfo)) {
+         if (gInterpreter->DataMemberInfo_TypeProperty(memberinfo) & ::kIsFundamental)
+            continue;
+         auto membertypename = TClassEdit::GetLong64_Name(gInterpreter->TypeName(gInterpreter->DataMemberInfo_TypeTrueName(memberinfo)));
+         if (!TClassTable::GetDictNorm(membertypename.c_str())) {
+            // Failure to load a dictionary is not (quite) a failure load
+            // the top-level library.   See detailed comment in the TProtoClass
+            // branch (above).
+            (void)DeepAutoLoadImpl(membertypename.c_str(), visited, true /*normalized*/);
+         }
+      }
+      gInterpreter->DataMemberInfo_Delete(memberinfo);
+   }
+   gInterpreter->ClassInfo_Delete(classinfo);
+   return 1;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -6205,7 +6198,8 @@ Int_t TCling::AutoLoad(const char *cls, Bool_t knowDictNotLoaded /* = kFALSE */)
    // quality of the search (i.e. bad in case of library with no pcm and no rootmap
    // file).
    TInterpreter::SuspendAutoParsing autoParseRaii(this);
-   return DeepAutoLoadImpl(cls);
+   std::unordered_set<std::string> visited;
+   return DeepAutoLoadImpl(cls, visited, false /*normalized*/);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -7487,7 +7481,7 @@ const char* TCling::MapCppName(const char* name) const
 {
    TTHREAD_TLS_DECL(std::string,buffer);
    ROOT::TMetaUtils::GetCppName(buffer,name);
-   return buffer.c_str();
+   return buffer.c_str(); // NOLINT
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -8365,7 +8359,7 @@ const char* TCling::ClassInfo_FullName(ClassInfo_t* cinfo) const
    TClingClassInfo* TClinginfo = (TClingClassInfo*) cinfo;
    TTHREAD_TLS_DECL(std::string,output);
    TClinginfo->FullName(output,*fNormalizedCtxt);
-   return output.c_str();
+   return output.c_str(); // NOLINT
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -8494,7 +8488,7 @@ const char* TCling::BaseClassInfo_FullName(BaseClassInfo_t* bcinfo) const
    TClingBaseClassInfo* TClinginfo = (TClingBaseClassInfo*) bcinfo;
    TTHREAD_TLS_DECL(std::string,output);
    TClinginfo->FullName(output,*fNormalizedCtxt);
-   return output.c_str();
+   return output.c_str(); // NOLINT
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -8656,7 +8650,7 @@ const char* TCling::DataMemberInfo_ValidArrayIndex(DataMemberInfo_t* dminfo) con
 
    TClingDataMemberInfo* TClinginfo = (TClingDataMemberInfo*) dminfo;
    result = TClinginfo->ValidArrayIndex().str();
-   return result.c_str();
+   return result.c_str(); // NOLINT
 }
 
 ////////////////////////////////////////////////////////////////////////////////

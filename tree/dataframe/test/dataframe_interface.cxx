@@ -61,6 +61,7 @@ TEST(RDataFrameInterface, CreateAliases)
    EXPECT_ANY_THROW(aliased_tdf.Alias("c4", "c")) << "No exception thrown when trying to alias a non-existing column.";
    EXPECT_ANY_THROW(aliased_tdf.Alias("c0", "c2")) << "No exception thrown when specifying an alias name which is the name of a column.";
    EXPECT_ANY_THROW(aliased_tdf.Alias("c2", "c1")) << "No exception thrown when re-using an alias for a different column.";
+   EXPECT_ANY_THROW(aliased_tdf.Alias("a-b", "c1")) << "No exception thrown when the alias is not a valid C++ variable name.";
 }
 
 TEST(RDataFrameInterface, CheckAliasesPerChain)
@@ -280,12 +281,12 @@ TEST(RDataFrameInterface, InvalidDefine)
    try {
       df.Define("1", [] { return true; });
    } catch (const std::runtime_error &e) {
-      EXPECT_STREQ("Cannot define column \"1\": not a valid C++ variable name.", e.what());
+      EXPECT_STREQ("RDataFrame::Define: cannot define column \"1\". Not a valid C++ variable name.", e.what());
    }
    try {
       df.Define("a-b", "true");
    } catch (const std::runtime_error &e) {
-      EXPECT_STREQ("Cannot define column \"a-b\": not a valid C++ variable name.", e.what());
+      EXPECT_STREQ("RDataFrame::Define: cannot define column \"a-b\". Not a valid C++ variable name.", e.what());
    }
 }
 
@@ -546,4 +547,29 @@ TEST(RDataFrameInterface, GetColumnTypeOfAlias)
       auto df = ROOT::RDataFrame(t).Alias("y", "x");
       EXPECT_EQ(df.GetColumnType("y"), "Int_t");
    }
+}
+
+TEST(RDataFrameInterface, JittedExprWithMultipleReturns)
+{
+   const auto counts = ROOT::RDataFrame(1)
+                          .Define("x", [] { return 42; })
+                          .Filter("if (x == 42) { return true; } else { return false; }")
+                          .Count()
+                          .GetValue();
+   EXPECT_EQ(counts, 1ull);
+}
+
+TEST(RDataFrameInterface, JittedExprWithManyVars)
+{
+   std::string expr = "x + x + x + x";
+   for (int i = 0; i < 10; ++i) {
+      expr = expr + '+' + expr;
+   }
+   expr = expr + ">0";
+   const auto counts = ROOT::RDataFrame(1)
+                          .Define("x", [] { return 1; })
+                          .Filter(expr)
+                          .Count()
+                          .GetValue();
+   EXPECT_EQ(counts, 1ull);
 }

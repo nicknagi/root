@@ -404,6 +404,8 @@ void AnnotateDecl(clang::CXXRecordDecl &CXXRD,
 
 size_t GetFullArrayLength(const clang::ConstantArrayType *arrayType)
 {
+   if (!arrayType)
+      return 0;
    llvm::APInt len = arrayType->getSize();
    while (const clang::ConstantArrayType *subArrayType = llvm::dyn_cast<clang::ConstantArrayType>(arrayType->getArrayElementTypeNoTypeQual())) {
       len *= subArrayType->getSize();
@@ -858,11 +860,10 @@ int STLContainerStreamer(const clang::FieldDecl &m,
    clang::QualType utype(ROOT::TMetaUtils::GetUnderlyingType(m.getType()), 0);
    Internal::RStl::Instance().GenerateTClassFor(utype, interp, normCtxt);
 
-   if (clxx->getTemplateSpecializationKind() == clang::TSK_Undeclared) return 0;
+   if (!clxx || clxx->getTemplateSpecializationKind() == clang::TSK_Undeclared) return 0;
 
    const clang::ClassTemplateSpecializationDecl *tmplt_specialization = llvm::dyn_cast<clang::ClassTemplateSpecializationDecl> (clxx);
    if (!tmplt_specialization) return 0;
-
 
    string stlType(ROOT::TMetaUtils::ShortTypeName(mTypename.c_str()));
    string stlName;
@@ -2695,6 +2696,16 @@ int GenerateFullDict(std::ostream &dictStream,
             // Register the collections
             // coverity[fun_call_w_exception] - that's just fine.
             Internal::RStl::Instance().GenerateTClassFor(selClass.GetNormalizedName(), CRD, interp, normCtxt);
+         } else if (CRD->getName() == "RVec") {
+            static const clang::DeclContext *vecOpsDC = nullptr;
+            if (!vecOpsDC)
+               vecOpsDC = llvm::dyn_cast<clang::DeclContext>(
+                  interp.getLookupHelper().findScope("ROOT::VecOps", cling::LookupHelper::NoDiagnostics));
+            if (vecOpsDC && vecOpsDC->Equals(CRD->getDeclContext())) {
+               // Register the collections
+               // coverity[fun_call_w_exception] - that's just fine.
+               Internal::RStl::Instance().GenerateTClassFor(selClass.GetNormalizedName(), CRD, interp, normCtxt);
+            }
          } else {
             if (!gOptIgnoreExistingDict) {
                ROOT::TMetaUtils::WriteClassInit(dictStream, selClass, CRD, interp, normCtxt, ctorTypes,
@@ -2819,7 +2830,7 @@ void CreateDictHeader(std::ostream &dictStream, const std::string &main_dictname
 
 void AddNamespaceSTDdeclaration(std::ostream &dictStream)
 {
-   dictStream  << "// The generated code does not explicitly qualifies STL entities\n"
+   dictStream  << "// The generated code does not explicitly qualify STL entities\n"
                << "namespace std {} using namespace std;\n\n";
 }
 
@@ -3308,10 +3319,16 @@ static std::string GenerateFwdDeclString(const RScanner &scan,
 //    for (auto* VAR: scan.fSelectedVariables)
 //       selectedDecls.push_back(VAR);
 
+   std::string fwdDeclLogs;
+
    // The "R\"DICTFWDDCLS(\n" ")DICTFWDDCLS\"" pieces have been moved to
    // TModuleGenerator to be able to make the diagnostics more telling in presence
    // of an issue ROOT-6752.
-   fwdDeclString += Decls2FwdDecls(selectedDecls,IsLinkdefFile,interp);
+   fwdDeclString += Decls2FwdDecls(selectedDecls,IsLinkdefFile,interp, genreflex::verbose ? &fwdDeclLogs : nullptr);
+
+   if (genreflex::verbose && !fwdDeclLogs.empty())
+      std::cout << "Logs from forward decl printer: \n"
+         << fwdDeclLogs;
 
    // Functions
 //    for (auto const& fcnDeclPtr : scan.fSelectedFunctions){
@@ -4214,7 +4231,7 @@ int RootClingMain(int argc,
          remove((moduleCachePath + llvm::sys::path::get_separator() + "vcruntime.pcm").str().c_str());
          remove((moduleCachePath + llvm::sys::path::get_separator() + "services.pcm").str().c_str());
 #endif
-         
+
 #ifdef R__MACOSX
          remove((moduleCachePath + llvm::sys::path::get_separator() + "Darwin.pcm").str().c_str());
 #else
@@ -4227,6 +4244,8 @@ int RootClingMain(int argc,
          remove((moduleCachePath + llvm::sys::path::get_separator() + "ROOT_Rtypes.pcm").str().c_str());
          remove((moduleCachePath + llvm::sys::path::get_separator() + "ROOT_Foundation_C.pcm").str().c_str());
          remove((moduleCachePath + llvm::sys::path::get_separator() + "ROOT_Foundation_Stage1_NoRTTI.pcm").str().c_str());
+      } else if (moduleName == "MathCore") {
+         remove((moduleCachePath + llvm::sys::path::get_separator() + "Vc.pcm").str().c_str());
       }
 
       // Set the C++ modules output directory to the directory where we generate
@@ -4544,6 +4563,7 @@ int RootClingMain(int argc,
    }
 
    std::ostream &dictStream = (!gOptIgnoreExistingDict && !gOptDictionaryFileName.empty()) ? fileout : std::cout;
+   bool isACLiC = gOptDictionaryFileName.getValue().find("_ACLiC_dict") != std::string::npos;
 
    if (!gOptIgnoreExistingDict) {
       // Now generate a second stream for the split dictionary if it is necessary
@@ -4567,9 +4587,12 @@ int RootClingMain(int argc,
          CreateDictHeader(*splitDictStream, main_dictname);
 
       if (!gOptNoGlobalUsingStd) {
-         AddNamespaceSTDdeclaration(dictStream);
-         if (gOptSplit) {
-            AddNamespaceSTDdeclaration(*splitDictStream);
+         // ACLiC'ed macros might rely on `using namespace std` in front of user headers
+         if (isACLiC) {
+            AddNamespaceSTDdeclaration(dictStream);
+            if (gOptSplit) {
+               AddNamespaceSTDdeclaration(*splitDictStream);
+            }
          }
       }
    }
@@ -4806,6 +4829,15 @@ int RootClingMain(int argc,
             GenerateNecessaryIncludes(*splitDictStream, includeForSource, extraIncludes);
          }
       }
+      if (!gOptNoGlobalUsingStd) {
+         // ACLiC'ed macros might have relied on `using namespace std` in front of user headers
+         if (!isACLiC) {
+            AddNamespaceSTDdeclaration(dictStream);
+            if (gOptSplit) {
+               AddNamespaceSTDdeclaration(*splitDictStream);
+            }
+         }
+      }
       if (gDriverConfig->fInitializeStreamerInfoROOTFile) {
          gDriverConfig->fInitializeStreamerInfoROOTFile(modGen.GetModuleFileName().c_str());
       }
@@ -4989,7 +5021,7 @@ int RootClingMain(int argc,
                                               scan.fSelectedTypedefs,
                                               interp);
 
-      rootclingRetCode = CreateNewRootMapFile(gOptRootMapFileName,
+      rootclingRetCode += CreateNewRootMapFile(gOptRootMapFileName,
                                           rootmapLibName,
                                           classesDefsList,
                                           classesNamesForRootmap,
@@ -5639,7 +5671,7 @@ int GenReflexMain(int argc, char **argv)
          "      library (needs target library switch. See its documentation).\n"
       },
 
-      
+
       {
          NOGLOBALUSINGSTD,
          NOTYPE ,

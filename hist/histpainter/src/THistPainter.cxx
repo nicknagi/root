@@ -3402,7 +3402,7 @@ void THistPainter::ExecuteEvent(Int_t event, Int_t px, Int_t py)
    if (!gPad) return;
 
    static Int_t bin, px1, py1, px2, py2, pyold;
-   static TBox *zoombox;
+   static TBox *zoombox = nullptr;
    Double_t zbx1,zbx2,zby1,zby2;
 
    Int_t bin1, bin2;
@@ -3468,6 +3468,7 @@ void THistPainter::ExecuteEvent(Int_t event, Int_t px, Int_t py)
             zby1 = TMath::Power(10,zby1);
             zby2 = TMath::Power(10,zby2);
          }
+         if (zoombox) Error("ExecuteEvent", "Last zoom box was not deleted");
          zoombox = new TBox(zbx1, zby1, zbx2, zby2);
          Int_t ci = TColor::GetColor("#7d7dff");
          TColor *zoomcolor = gROOT->GetColor(ci);
@@ -3534,8 +3535,10 @@ void THistPainter::ExecuteEvent(Int_t event, Int_t px, Int_t py)
             zby2 = gPad->AbsPixeltoY(py);
             if (gPad->GetLogx()) zbx2 = TMath::Power(10,zbx2);
             if (gPad->GetLogy()) zby2 = TMath::Power(10,zby2);
-            zoombox->SetX2(zbx2);
-            zoombox->SetY2(zby2);
+            if (zoombox) {
+               zoombox->SetX2(zbx2);
+               zoombox->SetY2(zby2);
+            }
             gPad->Modified();
             gPad->Update();
          }
@@ -3607,7 +3610,7 @@ void THistPainter::ExecuteEvent(Int_t event, Int_t px, Int_t py)
                yaxis->SetRangeUser(y1, y2);
             }
             zoombox->Delete();
-            zoombox = 0;
+            zoombox = nullptr;
          }
       }
       gPad->Modified(kTRUE);
@@ -5168,7 +5171,7 @@ void THistPainter::PaintBoxes(Option_t *)
 
          if (TMath::Abs(z) <  zminlin) continue; // Can be the case with ...
          if (TMath::Abs(z) >  zmaxlin) z = zmaxlin; // ... option Same
-         if (kZminNeg && z==0) continue;      // Do not draw empty bins if case of histo with netgative bins.
+         if (kZminNeg && z==0) continue;      // Do not draw empty bins if case of histo with negative bins.
 
          if (z < 0) {
             if (Hoption.Logz) continue;
@@ -9517,7 +9520,7 @@ void THistPainter::PaintTable(Option_t *option)
 
    // Draw the histogram according to the option
    } else {
-      if (fH->InheritsFrom(TH2Poly::Class())) {
+      if (fH->InheritsFrom(TH2Poly::Class()) && Hoption.Axis<=0) {
          if (Hoption.Fill)         PaintTH2PolyBins("f");
          if (Hoption.Color)        PaintTH2PolyColorLevels(option);
          if (Hoption.Scat)         PaintTH2PolyScatterPlot(option);

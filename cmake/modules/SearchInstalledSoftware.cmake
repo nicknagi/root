@@ -1,4 +1,4 @@
-# Copyright (C) 1995-2020, Rene Brun and Fons Rademakers.
+# Copyright (C) 1995-2021, Rene Brun and Fons Rademakers.
 # All rights reserved.
 #
 # For the licensing terms see $ROOTSYS/LICENSE.
@@ -242,6 +242,7 @@ if(builtin_lzma)
       INSTALL_DIR ${CMAKE_BINARY_DIR}
       CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix <INSTALL_DIR> --libdir <INSTALL_DIR>/lib
                         --with-pic --disable-shared --quiet
+                        --disable-scripts --disable-xz --disable-xzdec --disable-lzmadec --disable-lzmainfo --disable-lzma-links
                         CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS=${LIBLZMA_CFLAGS} LDFLAGS=${LIBLZMA_LDFLAGS}
       LOG_DOWNLOAD 1 LOG_CONFIGURE 1 LOG_BUILD 1 LOG_INSTALL 1 BUILD_IN_SOURCE 1
       BUILD_BYPRODUCTS ${LIBLZMA_LIBRARIES}
@@ -249,6 +250,25 @@ if(builtin_lzma)
     )
     set(LIBLZMA_INCLUDE_DIR ${CMAKE_BINARY_DIR}/include)
   endif()
+endif()
+
+#---Check for xxHash-----------------------------------------------------------------
+if(NOT builtin_xxhash)
+  message(STATUS "Looking for xxHash")
+  if(fail-on-missing)
+    find_package(xxHash REQUIRED)
+  else()
+    find_package(xxHash)
+    if(NOT xxHash_FOUND)
+      message(STATUS "xxHash not found. Switching on builtin_xxhash option")
+      set(builtin_xxhash ON CACHE BOOL "Enabled because xxHash not found (${builtin_xxhash_description})" FORCE)
+    endif()
+  endif()
+endif()
+
+if(builtin_xxhash)
+  list(APPEND ROOT_BUILTINS xxHash)
+  add_subdirectory(builtins/xxhash)
 endif()
 
 #---Check for ZSTD-------------------------------------------------------------------
@@ -277,25 +297,6 @@ endif()
 if(builtin_zstd)
   list(APPEND ROOT_BUILTINS ZSTD)
   add_subdirectory(builtins/zstd)
-endif()
-
-#---Check for xxHash-----------------------------------------------------------------
-if(NOT builtin_xxhash)
-  message(STATUS "Looking for xxHash")
-  if(fail-on-missing)
-    find_package(xxHash REQUIRED)
-  else()
-    find_package(xxHash)
-    if(NOT xxHash_FOUND)
-      message(STATUS "xxHash not found. Switching on builtin_xxhash option")
-      set(builtin_xxhash ON CACHE BOOL "Enabled because xxHash not found (${builtin_xxhash_description})" FORCE)
-    endif()
-  endif()
-endif()
-
-if(builtin_xxhash)
-  list(APPEND ROOT_BUILTINS xxHash)
-  add_subdirectory(builtins/xxhash)
 endif()
 
 #---Check for LZ4--------------------------------------------------------------------
@@ -918,8 +919,8 @@ if(xrootd AND NOT builtin_xrootd)
 endif()
 
 if(builtin_xrootd)
-  set(XROOTD_VERSION 4.12.3)
-  set(XROOTD_VERSIONNUM 400120003)
+  set(XROOTD_VERSION 4.12.8)
+  set(XROOTD_VERSIONNUM 400120008)
   set(XROOTD_SRC_URI ${lcgpackages}/xrootd-${XROOTD_VERSION}.tar.gz)
   set(XROOTD_DESTDIR ${CMAKE_BINARY_DIR})
   set(XROOTD_ROOTDIR ${XROOTD_DESTDIR})
@@ -938,7 +939,7 @@ if(builtin_xrootd)
   ExternalProject_Add(
     XROOTD
     URL ${XROOTD_SRC_URI}
-    URL_HASH SHA256=6f2ca1accc8d49d605706bb556777c753860bf46d845b1ee11393a5cb5987f15
+    URL_HASH SHA256=86d8e4bd7382fb3053002cf3d58b997623d1d26db93c8891080603827f01b4cd
     INSTALL_DIR ${XROOTD_ROOTDIR}
     CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>
                -DCMAKE_BUILD_TYPE=Release
@@ -1803,7 +1804,9 @@ if (testing)
     add_dependencies(${lib} googletest)
     if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU" AND
         ${CMAKE_CXX_COMPILER_VERSION} VERSION_GREATER_EQUAL 9)
-      target_compile_options(${lib} INTERFACE -Wno-deprecated-copy)
+      # TODO cmake 3.11
+      #target_compile_options(${lib} INTERFACE -Wno-deprecated-copy)
+      SET_PROPERTY(TARGET ${lib} APPEND PROPERTY INTERFACE_COMPILE_OPTIONS "-Wno-deprecated-copy")
     endif()
   endforeach()
   # Once we require at least cmake 3.11, target_include_directories will work for imported targets
@@ -1888,4 +1891,25 @@ if(NOT ROOT_HAVE_CXX_ATOMICS_WITHOUT_LIB)
   if(ROOT_ATOMIC_LIB)
     set(ROOT_ATOMIC_LIBS ${ROOT_ATOMIC_LIB})
   endif()
+endif()
+
+#------------------------------------------------------------------------------------
+# Check if the pyspark package is installed on the system.
+# Needed to run tests of the distributed RDataFrame module that use pyspark.
+# The functionality has been tested with pyspark 2.4 and above.
+if(test_distrdf_pyspark)
+  message(STATUS "Looking for PySpark")
+
+  if(fail-on-missing)
+    find_package(PySpark 2.4 REQUIRED)
+  else()
+
+    find_package(PySpark 2.4)
+    if(NOT PySpark_FOUND)
+      message(STATUS "Switching OFF 'test_distrdf_pyspark' option")
+      set(test_distrdf_pyspark OFF CACHE BOOL "Disabled because PySpark not found" FORCE)
+    endif()
+
+  endif()
+
 endif()
