@@ -23,6 +23,7 @@ ROOT_STANDARD_LIBRARY_PACKAGE(ROOTTMVASofie
    TMVA/ROperator.hxx
    TMVA/ROperator_Gemm.hxx
    TMVA/ROperator_Relu.hxx
+    TMVA/ROperator_Add.hxx
    TMVA/ROperator_Transpose.hxx
    TMVA/SOFIE_common.hxx
    ${PROTO_HDRS}
@@ -38,3 +39,6 @@ ROOT_STANDARD_LIBRARY_PACKAGE(ROOTTMVASofie
     TMVA
    NO_CXXMODULE
 )
+
+set(Libraries TMVA ROOTTMVASofie)
+ROOT_EXECUTABLE(testSofie src/Prototype.cxx LIBRARIES ${Libraries})
